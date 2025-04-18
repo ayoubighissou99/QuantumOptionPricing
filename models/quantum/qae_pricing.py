@@ -1,26 +1,25 @@
 """
 Quantum Amplitude Estimation (QAE) for option pricing.
 
-This module implements quantum algorithms for pricing European options
-using Quantum Amplitude Estimation (QAE).
+This module implements simplified quantum algorithms for pricing European options
+using Quantum Amplitude Estimation (QAE) and Quantum Monte Carlo.
 """
 
 import numpy as np
-from qiskit import Aer, QuantumCircuit, transpile
-from qiskit.circuit.library import LinearAmplitudeFunction
-from qiskit_algorithms import EstimationProblem, AmplitudeEstimation
-from qiskit.utils import QuantumInstance
+from qiskit import  QuantumCircuit, execute, transpile
+from qiskit_aer import Aer
+from qiskit.circuit.library import QFT
 
 
 class QuantumAmplitudeEstimationPricer:
     """
     Option pricer using Quantum Amplitude Estimation (QAE).
     
-    This class implements an option pricing model based on QAE, which provides
-    a quadratic speedup compared to classical Monte Carlo simulation.
+    This is a simplified implementation that focuses on demonstration rather than
+    optimal implementation.
     """
     
-    def __init__(self, num_uncertainty_qubits=3, num_evaluation_qubits=5, shots=1024, backend_name='qasm_simulator'):
+    def __init__(self, num_uncertainty_qubits=3, num_evaluation_qubits=3, shots=1024, backend_name='qasm_simulator'):
         """
         Initialize the QAE pricer.
         
@@ -41,19 +40,13 @@ class QuantumAmplitudeEstimationPricer:
         
         # Set up quantum backend
         self.backend = Aer.get_backend(backend_name)
-        self.quantum_instance = QuantumInstance(
-            backend=self.backend,
-            shots=self.shots
-        )
     
-    def _create_uncertainty_model(self, num_qubits, spot_price, volatility, time_to_maturity, risk_free_rate, bounds=None):
+    def _create_uncertainty_circuit(self, spot_price, volatility, time_to_maturity, risk_free_rate):
         """
-        Create a quantum circuit that encodes the log-normal distribution of the stock price.
+        Create a quantum circuit for encoding the uncertainty distribution.
         
         Parameters:
         -----------
-        num_qubits : int
-            Number of qubits for the uncertainty model
         spot_price : float
             Current price of the underlying asset
         volatility : float
@@ -62,8 +55,6 @@ class QuantumAmplitudeEstimationPricer:
             Time to option expiration in years
         risk_free_rate : float
             Annual risk-free interest rate
-        bounds : tuple, optional
-            Lower and upper bounds for the asset price distribution
             
         Returns:
         --------
@@ -77,34 +68,26 @@ class QuantumAmplitudeEstimationPricer:
         sigma = volatility * np.sqrt(time_to_maturity)
         
         # Determine bounds for the asset price distribution
-        if bounds is None:
-            # Set bounds to cover most of the log-normal distribution
-            # Typically, we want to cover ±6 standard deviations
-            low = np.maximum(0, spot_price * np.exp(mu - 6 * sigma))
-            high = spot_price * np.exp(mu + 6 * sigma)
-            bounds = (low, high)
+        low = np.maximum(0, spot_price * np.exp(mu - 6 * sigma))
+        high = spot_price * np.exp(mu + 6 * sigma)
         
-        # Create a simple circuit with Hadamard gates for now
-        # In a real application, this would be replaced with a proper
-        # log-normal distribution encoding
-        uncertainty_model = QuantumCircuit(num_qubits, name='Uncertainty Model')
+        # Create a simple uncertainty circuit with Hadamard gates
+        circuit = QuantumCircuit(self.num_uncertainty_qubits)
         
         # Apply Hadamard gates to create a uniform superposition
-        # This is a simplification - a real implementation would use
-        # quantum circuits to approximate the log-normal distribution
-        for qubit in range(num_qubits):
-            uncertainty_model.h(qubit)
+        for qubit in range(self.num_uncertainty_qubits):
+            circuit.h(qubit)
         
-        return uncertainty_model, bounds
+        return circuit, (low, high)
     
-    def _create_payoff_operator(self, num_uncertainty_qubits, strike_price, bounds, is_call=True):
+    def _create_payoff_circuit(self, uncertainty_circuit, strike_price, bounds, is_call=True):
         """
-        Create a quantum circuit that encodes the European option payoff function.
+        Create a quantum circuit for computing the option payoff.
         
         Parameters:
         -----------
-        num_uncertainty_qubits : int
-            Number of qubits for the uncertainty model
+        uncertainty_circuit : qiskit.QuantumCircuit
+            Quantum circuit encoding the uncertainty model
         strike_price : float
             Strike price of the option
         bounds : tuple
@@ -114,55 +97,46 @@ class QuantumAmplitudeEstimationPricer:
             
         Returns:
         --------
-        qiskit.circuit.library.LinearAmplitudeFunction
-            Quantum circuit encoding the payoff function
+        qiskit.QuantumCircuit
+            Quantum circuit encoding the payoff calculation
         """
-        # Extract bounds
+        # Extract uncertainty circuit parameters
+        num_qubits = uncertainty_circuit.num_qubits
+        
+        # Create a new circuit that includes an ancilla qubit for the payoff
+        circuit = QuantumCircuit(num_qubits + 1, 1)
+        
+        # Add the uncertainty model
+        circuit.compose(uncertainty_circuit, qubits=range(num_qubits), inplace=True)
+        
+        # Add a simple rotation on the payoff qubit based on the strike price
+        # This is a very simplified approach - in a real implementation, we would
+        # encode the actual payoff function more precisely
+        
+        # For demonstration, we'll just use a controlled rotation from each qubit
+        # to approximate the payoff function
         low, high = bounds
         
-        # Define the payoff function
+        # Calculate a scale factor for the rotations
         if is_call:
-            # Call option payoff: max(S - K, 0)
-            def payoff(x):
-                return np.maximum(0, x - strike_price)
+            scale = np.pi / num_qubits if high > strike_price else 0
         else:
-            # Put option payoff: max(K - S, 0)
-            def payoff(x):
-                return np.maximum(0, strike_price - x)
+            scale = np.pi / num_qubits if strike_price > low else 0
         
-        # Scale the payoff to fit within [0, 1]
-        # Compute the maximum possible payoff within the given bounds
-        if is_call:
-            max_payoff = max(0, high - strike_price)
-        else:
-            max_payoff = max(0, strike_price - low)
+        # Apply controlled rotations from each uncertainty qubit to the payoff qubit
+        for qubit in range(num_qubits):
+            weight = 2**(qubit) / (2**num_qubits - 1)
+            angle = scale * weight
+            circuit.cry(angle, qubit, num_qubits)
         
-        # Avoid division by zero
-        if max_payoff == 0:
-            max_payoff = 1
+        # Measure the payoff qubit
+        circuit.measure(num_qubits, 0)
         
-        # Create the slope and offset for the linear amplitude function
-        # This is a simplified approach
-        slope = 1.0 / max_payoff
-        offset = 0.0
-        
-        # Create the linear amplitude function circuit
-        # This maps the payoff function to qubit amplitudes
-        payoff_circuit = LinearAmplitudeFunction(
-            num_state_qubits=num_uncertainty_qubits,
-            slope=slope,
-            offset=offset,
-            domain=(low, high),
-            image=(0, 1),
-            breakpoints=[strike_price],
-            name="Payoff Function"
-        )
-        
-        return payoff_circuit
+        return circuit
     
     def price_option(self, spot_price, strike_price, volatility, risk_free_rate, time_to_maturity, is_call=True):
         """
-        Price a European option using Quantum Amplitude Estimation.
+        Price a European option using a simplified Quantum Amplitude Estimation approach.
         
         Parameters:
         -----------
@@ -185,63 +159,59 @@ class QuantumAmplitudeEstimationPricer:
             Dictionary containing option price and related information
         """
         # Create the uncertainty model circuit
-        uncertainty_circuit, bounds = self._create_uncertainty_model(
-            self.num_uncertainty_qubits,
+        uncertainty_circuit, bounds = self._create_uncertainty_circuit(
             spot_price,
             volatility,
             time_to_maturity,
             risk_free_rate
         )
         
-        # Create the payoff operator circuit
-        payoff_circuit = self._create_payoff_operator(
-            self.num_uncertainty_qubits,
+        # Create the payoff circuit
+        payoff_circuit = self._create_payoff_circuit(
+            uncertainty_circuit,
             strike_price,
             bounds,
             is_call
         )
         
-        # Combine the uncertainty model and payoff operator
-        # The payoff circuit operates on the uncertainty circuit output
-        option_pricing_circuit = payoff_circuit.compose(uncertainty_circuit)
+        # Execute the circuit
+        transpiled_circuit = transpile(payoff_circuit, self.backend)
+        job = execute(transpiled_circuit, self.backend, shots=self.shots)
+        counts = job.result().get_counts()
         
-        # Set up the estimation problem for QAE
-        # We want to estimate the expected payoff
-        estimation_problem = EstimationProblem(
-            state_preparation=option_pricing_circuit,
-            objective_qubits=[self.num_uncertainty_qubits],  # index of the objective qubit
-            post_processing=lambda x: x * (bounds[1] - bounds[0])  # Scale the result back to the original domain
-        )
+        # Extract the estimated amplitude
+        if '1' in counts:
+            ones_count = counts['1']
+        else:
+            ones_count = 0
         
-        # Create the QAE algorithm
-        qae = AmplitudeEstimation(
-            num_eval_qubits=self.num_evaluation_qubits,
-            quantum_instance=self.quantum_instance
-        )
+        estimated_amplitude = ones_count / self.shots
         
-        # Run the QAE algorithm
-        qae_result = qae.estimate(estimation_problem)
+        # Calculate the option price
+        low, high = bounds
+        price_range = high - low
+        expected_payoff = estimated_amplitude * price_range
         
-        # Extract the estimated amplitude (expected payoff)
-        estimated_amplitude = qae_result.estimation
-        
-        # Calculate the option price by discounting the expected payoff
+        # Apply discount
         discount_factor = np.exp(-risk_free_rate * time_to_maturity)
-        option_price = discount_factor * estimated_amplitude
+        option_price = discount_factor * expected_payoff
+        
+        # Calculate confidence interval using binomial distribution
+        std_dev = np.sqrt((estimated_amplitude * (1 - estimated_amplitude)) / self.shots)
+        z_score = 1.96  # 95% confidence interval
+        ci_half_width = z_score * std_dev * price_range * discount_factor
         
         # Prepare the result
         result = {
             'price': option_price,
             'confidence_interval': [
-                discount_factor * qae_result.confidence_interval_68[0],
-                discount_factor * qae_result.confidence_interval_68[1]
+                max(0, option_price - ci_half_width),
+                option_price + ci_half_width
             ],
-            'circuit_depth': option_pricing_circuit.depth(),
-            'num_qubits': option_pricing_circuit.num_qubits,
+            'circuit_depth': payoff_circuit.depth(),
+            'num_qubits': payoff_circuit.num_qubits,
             'shots': self.shots,
-            'estimated_amplitude': estimated_amplitude,
-            'estimated_precision': qae_result.estimation_processed_std_dev,
-            'qae_iterations': 2 ** self.num_evaluation_qubits
+            'estimated_amplitude': estimated_amplitude
         }
         
         return result
@@ -251,8 +221,7 @@ class QuantumMonteCarloPricer:
     """
     Option pricer using Quantum Monte Carlo.
     
-    This class implements an option pricing model based on quantum circuits
-    for sampling from distributions.
+    This is a simplified implementation for demonstration purposes.
     """
     
     def __init__(self, num_qubits=6, shots=1024, backend_name='qasm_simulator'):
@@ -262,7 +231,7 @@ class QuantumMonteCarloPricer:
         Parameters:
         -----------
         num_qubits : int, optional
-            Number of qubits to represent the uncertainty model
+            Number of qubits for the quantum circuit
         shots : int, optional
             Number of shots for the quantum simulation
         backend_name : str, optional
@@ -270,44 +239,17 @@ class QuantumMonteCarloPricer:
         """
         self.num_qubits = num_qubits
         self.shots = shots
-        
-        # Set up quantum backend
         self.backend = Aer.get_backend(backend_name)
     
-    def _create_distribution_circuit(self, spot_price, volatility, time_to_maturity, risk_free_rate):
+    def _create_sampling_circuit(self):
         """
-        Create a quantum circuit that can sample from a log-normal distribution.
+        Create a quantum circuit for sampling.
         
-        Parameters:
-        -----------
-        spot_price : float
-            Current price of the underlying asset
-        volatility : float
-            Annualized volatility of the underlying asset
-        time_to_maturity : float
-            Time to option expiration in years
-        risk_free_rate : float
-            Annual risk-free interest rate
-            
         Returns:
         --------
         qiskit.QuantumCircuit
             Quantum circuit for sampling
-        float
-            Lower bound of the distribution
-        float
-            Upper bound of the distribution
         """
-        # Calculate parameters for the log-normal distribution
-        mu = (risk_free_rate - 0.5 * volatility**2) * time_to_maturity
-        sigma = volatility * np.sqrt(time_to_maturity)
-        
-        # Determine bounds for the asset price distribution
-        low = np.maximum(0, spot_price * np.exp(mu - 6 * sigma))
-        high = spot_price * np.exp(mu + 6 * sigma)
-        
-        # Create a circuit for sampling
-        # This is a simplified approach - we'll just create a uniform distribution
         circuit = QuantumCircuit(self.num_qubits, self.num_qubits)
         
         # Apply Hadamard gates to create a uniform superposition
@@ -317,7 +259,7 @@ class QuantumMonteCarloPricer:
         # Measure all qubits
         circuit.measure(range(self.num_qubits), range(self.num_qubits))
         
-        return circuit, low, high
+        return circuit
     
     def price_option(self, spot_price, strike_price, volatility, risk_free_rate, time_to_maturity, is_call=True):
         """
@@ -343,57 +285,59 @@ class QuantumMonteCarloPricer:
         dict
             Dictionary containing option price and related information
         """
+        # Calculate parameters for the log-normal distribution
+        mu = (risk_free_rate - 0.5 * volatility**2) * time_to_maturity
+        sigma = volatility * np.sqrt(time_to_maturity)
+        
+        # Determine bounds for the asset price distribution
+        low = np.maximum(0, spot_price * np.exp(mu - 6 * sigma))
+        high = spot_price * np.exp(mu + 6 * sigma)
+        
         # Create the sampling circuit
-        circuit, low, high = self._create_distribution_circuit(
-            spot_price,
-            volatility,
-            time_to_maturity,
-            risk_free_rate
-        )
+        circuit = self._create_sampling_circuit()
         
-        # Transpile the circuit for the backend
+        # Execute the circuit
         transpiled_circuit = transpile(circuit, self.backend)
-        
-        # Run the circuit to generate samples
-        job = self.backend.run(transpiled_circuit, shots=self.shots)
+        job = execute(transpiled_circuit, self.backend, shots=self.shots)
         counts = job.result().get_counts()
         
         # Convert binary measurement outcomes to stock prices
-        total_range = high - low
         payoffs = []
+        total_range = high - low
+        max_int = 2**self.num_qubits - 1
         
         for bitstring, count in counts.items():
-            # Convert bitstring to a number between 0 and 1
-            fraction = int(bitstring, 2) / (2**self.num_qubits - 1)
+            # Convert bitstring to integer
+            int_value = int(bitstring, 2)
             
-            # Map to the price range
-            price = low + fraction * total_range
+            # Map to price range
+            price = low + (int_value / max_int) * total_range
             
-            # Calculate the payoff
+            # Calculate payoff
             if is_call:
                 payoff = max(0, price - strike_price)
             else:
                 payoff = max(0, strike_price - price)
             
-            # Add to the list of payoffs with the appropriate weight
+            # Add to payoffs list with appropriate weight
             payoffs.extend([payoff] * count)
         
-        # Calculate the average payoff
+        # Calculate expected payoff
         expected_payoff = np.mean(payoffs)
         
-        # Calculate the option price by discounting the expected payoff
+        # Apply discount
         discount_factor = np.exp(-risk_free_rate * time_to_maturity)
         option_price = discount_factor * expected_payoff
         
-        # Calculate the standard error
+        # Calculate standard error
         std_error = np.std(payoffs) / np.sqrt(self.shots)
         
         # Prepare the result
         result = {
             'price': option_price,
             'confidence_interval': [
-                discount_factor * (expected_payoff - 1.96 * std_error),
-                discount_factor * (expected_payoff + 1.96 * std_error)
+                max(0, option_price - 1.96 * discount_factor * std_error),
+                option_price + 1.96 * discount_factor * std_error
             ],
             'circuit_depth': circuit.depth(),
             'num_qubits': circuit.num_qubits,

@@ -7,35 +7,44 @@ name = "quantum_option_pricing"
 version = "0.1.0"
 description = "Quantum computing approach to option pricing"
 readme = "README.md"
-requires-python = ">=3.8"
+requires-python = ">=3.8,<3.12"  # Qiskit potrebbe avere problemi con Python 3.12
 license = {text = "MIT"}
 authors = [
-    {name = "Ayoube Ighissou", email = "ayoubighissou@gmail.com"},
+    {name = "ayoube ighissou", email = "ayoubighissou@gmail.com"},
 ]
 dependencies = [
-    "numpy>=1.20.0",
-    "pandas>=1.3.0",
-    "scipy>=1.7.0",
-    "qiskit>=0.34.0",
-    "qiskit-finance>=0.3.0",
-    "pennylane>=0.22.0",
-    "matplotlib>=3.4.0",
-    "plotly>=5.3.0",
-    "seaborn>=0.11.0",
-    "streamlit>=1.10.0",
+    # Core libraries
+    "numpy>=1.20.0,<2.0.0",
+    "pandas>=1.3.0,<2.0.0",
+    "scipy>=1.7.0,<2.0.0",
+    
+    # Quantum computing libraries - versioni specifiche
+    "qiskit>=0.42.0,<0.43.0",  # Ultima versione stabile che non richiede BaseSampler
+    "qiskit-aer>=0.12.0,<0.13.0",
+    
+    # Evita qiskit-finance o limitalo a una versione compatibile
+    # "qiskit-finance>=0.3.0,<0.4.0",
+    
+    # Visualizzazione
+    "matplotlib>=3.4.0,<4.0.0",
+    "plotly>=5.3.0,<6.0.0",
+    "seaborn>=0.11.0,<0.13.0",
+    
+    # Web application
+    "streamlit>=1.10.0,<2.0.0",
 ]
 
 [project.optional-dependencies]
 dev = [
-    "pytest>=6.2.5",
-    "black>=22.1.0",
-    "isort>=5.10.1",
-    "flake8>=4.0.1",
-    "mypy>=0.931",
+    "pytest>=6.2.5,<8.0.0",
+    "black>=22.1.0,<24.0.0",
+    "isort>=5.10.1,<6.0.0",
+    "flake8>=4.0.1,<7.0.0",
+    "mypy>=0.931,<2.0.0",
 ]
 test = [
-    "pytest>=6.2.5",
-    "pytest-cov>=2.12.1",
+    "pytest>=6.2.5,<8.0.0",
+    "pytest-cov>=2.12.1,<5.0.0",
 ]
 
 [tool.hatch.build.targets.wheel]

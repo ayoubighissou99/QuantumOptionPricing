@@ -2,13 +2,14 @@
 Quantum models for option pricing.
 
 This package contains various quantum algorithms for pricing financial derivatives.
+This is a simplified version that avoids problematic imports.
 """
 
-from quantum.qae_pricing import (
+from models.quantum.qae_pricing import (
     QuantumAmplitudeEstimationPricer,
     QuantumMonteCarloPricer
 )
-from quantum.qmc_advanced import (
+from models.quantum.qmc_advanced import (
     PennyLaneQuantumMonteCarlo,
     QuantumKitaevPricer
 )
